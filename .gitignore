@@ -1,0 +1,24 @@
+# Virtual Environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data folders
+uploads/*
+cleaned/*
+reports/*
+
+# Keep the folders in Git
+!uploads/.gitkeep
+!cleaned/.gitkeep
+!reports/.gitkeep
+
+# VS Code
+.vscode/
+
+# Environment variables
+.env
+
+.streamlit/secrets.toml
