@@ -9,10 +9,11 @@ Two sub-tabs:
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 
-from src.pipeline      import run_pipeline
+from src.pipeline       import run_pipeline
 from src.smart_analyzer import build_cleaning_plan
-from src.cleaner       import apply_column_fix
+from src.cleaner        import apply_column_fix
 
 
 # ─────────────────────────────────────────────────────────────
@@ -49,9 +50,9 @@ ISSUE_ICONS = {
 # Main entry point  (called from app.py)
 # ─────────────────────────────────────────────────────────────
 def show_cleaning(df):
-    st.subheader("🧹 Data Cleaning")
+    st.subheader("🧹 Autonomous Data Remediation Engine")
 
-    auto_tab, smart_tab = st.tabs(["⚡ Auto-Clean", "🧠 Smart Clean  (AI per-column)"])
+    auto_tab, smart_tab = st.tabs(["⚡ 1-Click Auto-Clean", "🧠 Interactive Smart Clean (AI Per-Column)"])
 
     with auto_tab:
         _show_auto_clean(df)
@@ -65,12 +66,12 @@ def show_cleaning(df):
 # ─────────────────────────────────────────────────────────────
 def _show_auto_clean(df):
     st.markdown(
-        "One-click pipeline: **dedup → trim → normalize casing → "
-        "smart imputation → parse dates → fix emails → cap outliers**"
+        "One-click pipeline: **standardize column headers → dedup → trim → normalize casing → "
+        "smart imputation → parse dates → validate emails → cap extreme outliers**"
     )
 
-    if st.button("⚡ Run Auto-Clean", use_container_width=True, type="primary", key="btn_auto"):
-        with st.spinner("Running auto-clean pipeline…"):
+    if st.button("⚡ Run Full Auto-Clean Pipeline", use_container_width=True, type="primary", key="btn_auto"):
+        with st.spinner("Executing autonomous cleaning pipeline…"):
             results = run_pipeline(df)
 
         cleaned_df     = results["cleaned_df"]
@@ -80,8 +81,13 @@ def _show_auto_clean(df):
         st.session_state["cleaned_df"]      = cleaned_df
         st.session_state["cleaning_report"] = report
         st.session_state["quality_report"]  = quality_report
+        st.session_state["fix_log"] = [
+            {"Column": "Pipeline", "Issue": "Auto-Clean", "Fix Applied": f"{k}: {_fmt(v)}"}
+            for k, v in report.items()
+            if k not in ["Rows Before", "Rows After", "Columns Before", "Columns After"]
+        ]
 
-        st.success("✅ Auto-Clean completed!")
+        st.success("✅ Auto-Clean executed successfully!")
 
         # Before / After metrics
         c1, c2, c3, c4 = st.columns(4)
@@ -93,7 +99,7 @@ def _show_auto_clean(df):
                   delta=report.get("Columns After", 0) - report.get("Columns Before", 0))
 
         st.divider()
-        st.subheader("📊 Pipeline Steps")
+        st.subheader("📊 Pipeline Execution Summary")
         skip = {"Rows Before", "Rows After", "Columns Before", "Columns After"}
         rows = [{"Step": k, "Result": _fmt(v)} for k, v in report.items() if k not in skip]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -110,33 +116,59 @@ def _show_auto_clean(df):
 def _show_smart_clean(df):
 
     st.markdown(
-        "**How it works:**  \n"
-        "1. Click **Analyse** — AI reads every column, detects semantic type "
-        "(Age, Salary, Email, Gender…) and lists all issues.  \n"
-        "2. For each issue, choose a fix from the AI-recommended options  \n"
-        "   (or accept the default — already highlighted in the dropdown).  \n"
-        "3. Click **Apply Selected Fixes** — preview your clean data instantly."
+        "**Interactive Remediation:**  \n"
+        "1. Click **Analyse Columns** — AI inspects domain semantics (Age, Salary, Email, Gender…) and flags invalid entries.  \n"
+        "2. For each detected anomaly, choose your preferred remediation policy (AI default is pre-selected).  \n"
+        "3. Click **Apply Selected Fixes** to transform your dataset."
     )
 
-    # ── Use the working df from session (auto-clean output if available) ──
+    # Working df from session
     working_key = "smart_working_df"
     if working_key not in st.session_state:
         st.session_state[working_key] = df.copy()
 
     col_a, col_b = st.columns([1, 1])
     if col_a.button("🔍 Analyse Columns", use_container_width=True, key="btn_analyse"):
-        with st.spinner("AI is analysing all columns…"):
+        with st.spinner("AI is inspecting all columns…"):
             plan = build_cleaning_plan(st.session_state[working_key])
         st.session_state["smart_plan"] = plan
 
-    if col_b.button("🔄 Reset to Original Data", use_container_width=True, key="btn_reset"):
+    if col_b.button("🔄 Reset to Original Upload", use_container_width=True, key="btn_reset"):
         st.session_state[working_key] = df.copy()
         if "smart_plan" in st.session_state:
             del st.session_state["smart_plan"]
         st.info("Reset to original uploaded data.")
 
+    # ── Global Find & Replace Tool ────────────────────────────────────
+    with st.expander("🔍 Global Find & Replace Utility", expanded=False):
+        st.caption("Search and replace placeholder values (e.g. 'N/A', '?', '-999', or typos) across your dataset.")
+        fr_col1, fr_col2, fr_col3 = st.columns(3)
+        with fr_col1:
+            find_val = st.text_input("Find Value:", placeholder="e.g. N/A, ?, null", key="fr_find")
+        with fr_col2:
+            replace_val = st.text_input("Replace With:", placeholder="e.g. 0, Unknown, or leave empty for null", key="fr_replace")
+        with fr_col3:
+            target_cols = st.multiselect("Apply to Columns (Empty = All):", options=st.session_state[working_key].columns.tolist(), key="fr_cols")
+
+        if st.button("🚀 Execute Find & Replace", key="btn_exec_fr", use_container_width=True):
+            if find_val:
+                work_df = st.session_state[working_key].copy()
+                cols_to_search = target_cols if target_cols else work_df.columns.tolist()
+                rep_target = np.nan if replace_val in ["", "null", "NaN", "None"] else replace_val
+                
+                total_rep = 0
+                for c in cols_to_search:
+                    mask = work_df[c].astype(str).str.lower() == find_val.lower()
+                    total_rep += int(mask.sum())
+                    work_df.loc[mask, c] = rep_target
+
+                st.session_state[working_key] = work_df
+                st.session_state["cleaned_df"] = work_df
+                st.session_state["smart_plan"] = build_cleaning_plan(work_df)
+                st.success(f"🎉 Replaced {total_rep} occurrences of '{find_val}' with '{replace_val}' across {len(cols_to_search)} column(s)!")
+
     if "smart_plan" not in st.session_state:
-        st.info("Click **Analyse Columns** to begin.")
+        st.info("Click **Analyse Columns** to inspect anomalies.")
         return
 
     plan = st.session_state["smart_plan"]
@@ -148,49 +180,38 @@ def _show_smart_clean(df):
 
     st.divider()
     m1, m2, m3 = st.columns(3)
-    m1.metric("Columns Analysed",     len(plan))
+    m1.metric("Columns Inspected",     len(plan))
     m2.metric("Columns with Issues",  len(issues_cols))
-    m3.metric("Total Issue Types",    total_issues)
+    m3.metric("Total Anomaly Types",   total_issues)
 
     if total_issues == 0:
-        st.success("🎉 No issues found! Your data looks clean and ready for analysis.")
+        st.success("🎉 Zero anomalies detected! Dataset is completely clean.")
         return
 
     st.divider()
 
     # ── Per-column issue cards + user choice selectors ────────────────
-    st.subheader("🔧 Choose Your Fix for Each Issue")
-    st.caption(
-        "Each dropdown shows the AI-recommended fix first. "
-        "Change it if you prefer a different approach."
-    )
+    st.subheader("🔧 Choose Remediation Policy for Each Anomaly")
+    st.caption("Each dropdown has the AI-recommended default pre-selected. Modify any option to customize.")
 
-    # We collect all user choices into this dict (keyed by unique widget key)
-    # We do NOT use st.form so that 'fill_custom' text inputs can appear
-    # dynamically when the user switches to that option.
-
-    user_choices = {}   # key → {column, issue_type, action, custom_value}
+    user_choices = {}
 
     for col_plan in issues_cols:
         col     = col_plan["column"]
         sem_lbl = col_plan["semantic_label"]
         dtype   = col_plan["dtype"]
 
-        # Colour the expander header by worst issue severity
         has_red = any(
             ISSUE_ICONS.get(iss["type"], "").startswith("🔴")
             for iss in col_plan["issues"]
         )
         badge = "🔴" if has_red else "🟠"
 
-        with st.expander(
-            f"{badge}  **`{col}`**   —   {sem_lbl}   `{dtype}`",
-            expanded=True
-        ):
+        with st.expander(f"{badge}  **`{col}`**   —   {sem_lbl}   `{dtype}`", expanded=True):
             for issue in col_plan["issues"]:
                 issue_type = issue["type"]
                 issue_icon = ISSUE_ICONS.get(issue_type, "⚠️")
-                opts       = issue["fix_options"]      # list of (code, label)
+                opts       = issue["fix_options"]
                 default_i  = next(
                     (i for i, o in enumerate(opts) if o[0] == issue["default_fix"]),
                     0
@@ -199,10 +220,9 @@ def _show_smart_clean(df):
 
                 st.markdown(f"**{issue_icon}** — {issue['description']}")
 
-                # Show sample bad values as a hint
                 if issue.get("sample_bad"):
                     sample_str = ", ".join(str(v) for v in issue["sample_bad"])
-                    st.caption(f"Sample values: `{sample_str}`")
+                    st.caption(f"Sample erroneous entries: `{sample_str}`")
 
                 widget_key    = f"sel_{col}_{issue_type}"
                 custom_key    = f"cus_{col}_{issue_type}"
@@ -216,11 +236,10 @@ def _show_smart_clean(df):
                 )
                 chosen_action = opts[labels.index(chosen_label)][0]
 
-                # Custom value input (only shown when user picks 'fill_custom')
                 custom_val = None
                 if chosen_action == "fill_custom":
                     custom_val = st.text_input(
-                        "Enter your custom fill value:",
+                        "Enter custom fill value:",
                         key = custom_key,
                         placeholder = "e.g. 0, N/A, Unknown …"
                     )
@@ -231,13 +250,11 @@ def _show_smart_clean(df):
                     "action":       chosen_action,
                     "custom_value": custom_val,
                 }
-
-                st.write("")  # spacing
+                st.write("")
 
     # ── Apply button ─────────────────────────────────────────────────
     st.divider()
-    if st.button("✅ Apply Selected Fixes", use_container_width=True,
-                 type="primary", key="btn_apply"):
+    if st.button("✅ Apply Selected Fixes", use_container_width=True, type="primary", key="btn_apply"):
 
         working_df = st.session_state[working_key].copy()
         apply_log  = []
@@ -262,32 +279,27 @@ def _show_smart_clean(df):
                 "Fix Applied":   description,
             })
 
-        # Persist the cleaned df so Export tab can use it
         st.session_state[working_key]       = working_df
         st.session_state["cleaned_df"]      = working_df
         st.session_state["smart_plan"]      = build_cleaning_plan(working_df)
+        st.session_state["fix_log"]         = apply_log
 
-        # ── Results summary ───────────────────────────────────────────
         st.success(
             f"✅ Applied **{len(apply_log)}** fix(es)."
             + (f"  Skipped {skipped} (kept as-is)." if skipped else "")
         )
 
         if apply_log:
-            st.subheader("📋 Fix Log")
-            st.dataframe(
-                pd.DataFrame(apply_log),
-                use_container_width=True,
-                hide_index=True
-            )
+            st.subheader("📋 Fix Execution Log")
+            st.dataframe(pd.DataFrame(apply_log), use_container_width=True, hide_index=True)
 
         remaining = sum(
             len(p["issues"]) for p in st.session_state["smart_plan"] if p["has_issues"]
         )
         if remaining > 0:
             st.warning(
-                f"⚠️ **{remaining}** issue type(s) still remain. "
-                "The column list above has been refreshed — apply more fixes or accept as-is."
+                f"⚠️ **{remaining}** anomaly type(s) remaining. "
+                "You can continue applying fixes or export your cleaned data."
             )
         else:
             st.success("🎉 All detected issues resolved! Data is clean.")
@@ -297,10 +309,9 @@ def _show_smart_clean(df):
         st.caption(f"Showing first 10 of {len(working_df)} rows")
         st.dataframe(working_df.head(10), use_container_width=True)
 
-
-    # ── Show columns that are already healthy ─────────────────────────
+    # ── Healthy columns accordion ─────────────────────────────────────
     if clean_cols:
-        with st.expander(f"✅  {len(clean_cols)} healthy column(s) — no issues detected"):
+        with st.expander(f"✅  {len(clean_cols)} healthy column(s) — zero anomalies"):
             healthy_df = pd.DataFrame([
                 {
                     "Column":         p["column"],
